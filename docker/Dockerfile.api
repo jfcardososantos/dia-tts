@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --to /usr/local/bin
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 # Create non-root user and set up directories
 RUN useradd -m -u 1001 appuser &&     mkdir -p /app/outputs /app &&     chown -R appuser:appuser /app
