@@ -12,7 +12,9 @@ import scipy.io.wavfile
 # Isso é feito globalmente para que o modelo seja carregado apenas uma vez
 # quando a aplicação iniciar, e não a cada requisição.
 print("Carregando o modelo TTS...")
-synthesizer = pipeline("text-to-speech", "Alissonerdx/Dia1.6-pt_BR-v1")
+# O argumento `trust_remote_code=True` é necessário para que modelos da comunidade
+# que definem sua própria arquitetura em código possam ser carregados.
+synthesizer = pipeline("text-to-speech", "Alissonerdx/Dia1.6-pt_BR-v1", trust_remote_code=True)
 print("Modelo carregado com sucesso!")
 
 
