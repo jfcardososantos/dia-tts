@@ -17,8 +17,13 @@ RUN apt-get update && apt-get install -y \
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+# Create and activate virtual environment
+RUN python3 -m venv /app/venv
+
 # Create non-root user and set up directories
-RUN useradd -m -u 1001 appuser &&     mkdir -p /app/outputs /app &&     chown -R appuser:appuser /app
+RUN useradd -m -u 1001 appuser && \
+    mkdir -p /app/outputs /app && \
+    chown -R appuser:appuser /app /app/venv
 
 USER appuser
 WORKDIR /app
@@ -28,6 +33,7 @@ COPY --chown=appuser:appuser . .
 
 # Set environment variables
 ENV PATH="/app/venv/bin:$PATH"
+
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
