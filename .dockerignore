@@ -1,0 +1,19 @@
+# Ignora o cache do Python
+__pycache__/
+*.pyc
+
+# Ignora ambientes virtuais
+.venv
+venv/
+env/
+
+# Ignora arquivos de configuração de IDEs
+.idea/
+.vscode/
+
+# Ignora o próprio git
+.git
+.gitignore
+
+# Ignora arquivos de output
+*.wav
