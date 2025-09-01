@@ -1,8 +1,4 @@
 Flask==2.3.3
-TTS==0.22.0
-torch>=2.0.0
-torchaudio>=2.0.0
-numpy>=1.24.0
-pydub>=0.25.1
 gTTS==2.4.0
+pydub>=0.25.1
 requests>=2.31.0
