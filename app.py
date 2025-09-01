@@ -1,101 +1,102 @@
 from flask import Flask, request, jsonify, send_file
-from transformers import pipeline
 import torch
 import io
-import numpy as np
-from scipy.io.wavfile import write
 import tempfile
 import os
-from pydub import AudioSegment
 import logging
+import base64
+from TTS.api import TTS
+import numpy as np
 
 # Configurar logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 class TTSService:
     def __init__(self):
-        self.model = None
+        self.tts_model = None
+        self.device = None
         self.load_model()
     
     def load_model(self):
-        """Carrega o modelo TTS do Hugging Face"""
+        """Carrega um modelo TTS funcional em português"""
         try:
-            logger.info("Carregando modelo Alissonerdx/Dia1.6-pt_BR-v1...")
+            logger.info("Carregando modelo TTS em português brasileiro...")
             
-            # Verifica se CUDA está disponível
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"Usando device: {device}")
+            # Define dispositivo
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Usando device: {self.device}")
             
-            # Carrega o pipeline TTS
-            self.model = pipeline(
-                "text-to-speech",
-                model="Alissonerdx/Dia1.6-pt_BR-v1",
-                device=0 if device == "cuda" else -1
-            )
-            
-            logger.info("Modelo carregado com sucesso!")
+            # Lista modelos disponíveis em português
+            try:
+                # Tenta carregar modelo Coqui TTS em português
+                self.tts_model = TTS(model_name="tts_models/pt/cv/vits", progress_bar=False)
+                logger.info("✅ Modelo Coqui TTS (pt/cv/vits) carregado com sucesso!")
+                
+            except Exception as e1:
+                logger.warning(f"Modelo Coqui não disponível: {e1}")
+                try:
+                    # Fallback para modelo multilingual
+                    self.tts_model = TTS(model_name="tts_models/multilingual/multi-dataset/your_tts", progress_bar=False)
+                    logger.info("✅ Modelo multilingual YourTTS carregado com sucesso!")
+                    
+                except Exception as e2:
+                    logger.warning(f"Modelo multilingual não disponível: {e2}")
+                    # Último fallback - Google TTS
+                    from gtts import gTTS
+                    self.tts_model = "gtts"
+                    logger.info("✅ Usando Google TTS como fallback")
             
         except Exception as e:
-            logger.error(f"Erro ao carregar modelo: {str(e)}")
-            self.model = None
+            logger.error(f"❌ Erro ao carregar qualquer modelo: {str(e)}")
+            self.tts_model = None
     
-    def text_to_speech(self, text: str, sample_rate: int = 22050) -> bytes:
+    def text_to_speech(self, text: str) -> bytes:
         """
         Converte texto em fala e retorna bytes do áudio em MP3
-        
-        Args:
-            text (str): Texto para converter
-            sample_rate (int): Taxa de amostragem do áudio
-            
-        Returns:
-            bytes: Áudio em formato MP3
         """
-        if not self.model:
-            raise Exception("Modelo não carregado")
+        if not self.tts_model:
+            raise Exception("Nenhum modelo TTS está carregado")
         
         try:
-            # Gera o áudio usando o modelo
             logger.info(f"Gerando áudio para texto: '{text[:50]}...'")
-            result = self.model(text)
             
-            # Extrai os dados de áudio
-            audio_data = result["audio"]
+            # Se estiver usando Google TTS como fallback
+            if self.tts_model == "gtts":
+                from gtts import gTTS
+                tts = gTTS(text=text, lang='pt-br', slow=False)
+                mp3_buffer = io.BytesIO()
+                tts.write_to_fp(mp3_buffer)
+                mp3_buffer.seek(0)
+                logger.info("✅ Áudio gerado com Google TTS!")
+                return mp3_buffer.getvalue()
             
-            # Se o áudio está em formato tensor, converte para numpy
-            if torch.is_tensor(audio_data):
-                audio_data = audio_data.cpu().numpy()
-            
-            # Normaliza o áudio para o range [-1, 1]
-            audio_data = np.array(audio_data)
-            if audio_data.dtype != np.float32:
-                audio_data = audio_data.astype(np.float32)
-            
-            # Normaliza se necessário
-            if np.abs(audio_data).max() > 1.0:
-                audio_data = audio_data / np.abs(audio_data).max()
-            
-            # Converte para int16 para compatibilidade com WAV
-            audio_int16 = (audio_data * 32767).astype(np.int16)
-            
-            # Cria arquivo WAV temporário em memória
-            wav_buffer = io.BytesIO()
-            write(wav_buffer, sample_rate, audio_int16)
-            wav_buffer.seek(0)
-            
-            # Converte WAV para MP3 usando pydub
-            audio_segment = AudioSegment.from_wav(wav_buffer)
-            mp3_buffer = io.BytesIO()
-            audio_segment.export(mp3_buffer, format="mp3", bitrate="128k")
-            mp3_buffer.seek(0)
-            
-            logger.info("Áudio gerado com sucesso!")
-            return mp3_buffer.getvalue()
-            
+            # Se estiver usando modelo Coqui TTS
+            else:
+                # Gera arquivo WAV temporário
+                temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                temp_wav.close()
+                
+                # Gera o áudio
+                self.tts_model.tts_to_file(text=text, file_path=temp_wav.name)
+                
+                # Converte WAV para MP3
+                from pydub import AudioSegment
+                audio = AudioSegment.from_wav(temp_wav.name)
+                mp3_buffer = io.BytesIO()
+                audio.export(mp3_buffer, format="mp3", bitrate="128k")
+                mp3_buffer.seek(0)
+                
+                # Remove arquivo temporário
+                os.unlink(temp_wav.name)
+                
+                logger.info("✅ Áudio gerado com Coqui TTS!")
+                return mp3_buffer.getvalue()
+                
         except Exception as e:
-            logger.error(f"Erro ao gerar áudio: {str(e)}")
+            logger.error(f"❌ Erro ao gerar áudio: {str(e)}")
             raise
 
 # Inicializa o serviço TTS
@@ -104,36 +105,32 @@ tts_service = TTSService()
 @app.route('/health', methods=['GET'])
 def health_check():
     """Endpoint para verificar se a API está funcionando"""
-    if tts_service.model is None:
+    if tts_service.tts_model is None:
         return jsonify({
             'status': 'unhealthy',
-            'message': 'Modelo não carregado'
+            'message': 'Nenhum modelo TTS carregado'
         }), 503
+    
+    model_info = "Coqui TTS" if tts_service.tts_model != "gtts" else "Google TTS"
     
     return jsonify({
         'status': 'healthy',
         'message': 'API TTS funcionando',
-        'model': 'Alissonerdx/Dia1.6-pt_BR-v1'
+        'model': model_info,
+        'device': tts_service.device,
+        'language': 'pt-br'
     })
 
 @app.route('/tts', methods=['POST'])
 def text_to_speech():
     """
     Endpoint principal para conversão de texto em fala
-    
-    Esperado JSON:
-    {
-        "text": "Texto para converter em fala",
-        "sample_rate": 22050  // opcional, padrão 22050
-    }
-    
-    Retorna: Arquivo MP3 com o áudio gerado
     """
     try:
         # Verifica se o modelo está carregado
-        if tts_service.model is None:
+        if tts_service.tts_model is None:
             return jsonify({
-                'error': 'Modelo não está carregado'
+                'error': 'Nenhum modelo TTS está carregado'
             }), 503
         
         # Obtém dados do request
@@ -149,16 +146,14 @@ def text_to_speech():
                 'error': 'Texto não pode estar vazio'
             }), 400
         
-        # Limita o tamanho do texto (opcional)
+        # Limita o tamanho do texto
         if len(text) > 1000:
             return jsonify({
                 'error': 'Texto muito longo (máximo 1000 caracteres)'
             }), 400
         
-        sample_rate = data.get('sample_rate', 22050)
-        
         # Gera o áudio
-        audio_bytes = tts_service.text_to_speech(text, sample_rate)
+        audio_bytes = tts_service.text_to_speech(text)
         
         # Cria arquivo temporário
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
@@ -190,26 +185,13 @@ def text_to_speech():
 @app.route('/tts/stream', methods=['POST'])
 def text_to_speech_json():
     """
-    Endpoint alternativo que retorna o áudio como base64 em JSON
-    
-    Esperado JSON:
-    {
-        "text": "Texto para converter em fala",
-        "sample_rate": 22050  // opcional
-    }
-    
-    Retorna JSON:
-    {
-        "audio_base64": "data:audio/mpeg;base64,UklGRn...",
-        "format": "mp3",
-        "sample_rate": 22050
-    }
+    Endpoint que retorna o áudio como base64 em JSON
     """
     try:
         # Verifica se o modelo está carregado
-        if tts_service.model is None:
+        if tts_service.tts_model is None:
             return jsonify({
-                'error': 'Modelo não está carregado'
+                'error': 'Nenhum modelo TTS está carregado'
             }), 503
         
         # Obtém dados do request
@@ -230,20 +212,20 @@ def text_to_speech_json():
                 'error': 'Texto muito longo (máximo 1000 caracteres)'
             }), 400
         
-        sample_rate = data.get('sample_rate', 22050)
-        
         # Gera o áudio
-        audio_bytes = tts_service.text_to_speech(text, sample_rate)
+        audio_bytes = tts_service.text_to_speech(text)
         
         # Converte para base64
-        import base64
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+        
+        model_info = "Coqui TTS" if tts_service.tts_model != "gtts" else "Google TTS"
         
         return jsonify({
             'audio_base64': f'data:audio/mpeg;base64,{audio_base64}',
             'format': 'mp3',
-            'sample_rate': sample_rate,
-            'text': text
+            'text': text,
+            'model': model_info,
+            'language': 'pt-br'
         })
         
     except Exception as e:
@@ -252,22 +234,51 @@ def text_to_speech_json():
             'error': f'Erro interno: {str(e)}'
         }), 500
 
+@app.route('/models', methods=['GET'])
+def list_models():
+    """Lista modelos TTS disponíveis"""
+    try:
+        available_models = []
+        
+        # Verifica modelos Coqui TTS
+        try:
+            from TTS.api import TTS
+            coqui_models = TTS.list_models()
+            pt_models = [m for m in coqui_models if 'pt' in m or 'portuguese' in m.lower()]
+            available_models.extend(pt_models)
+        except:
+            pass
+        
+        # Sempre tem Google TTS disponível
+        available_models.append("Google TTS (gtts)")
+        
+        return jsonify({
+            'available_models': available_models,
+            'current_model': "Coqui TTS" if tts_service.tts_model != "gtts" else "Google TTS",
+            'status': 'healthy' if tts_service.tts_model else 'no_model_loaded'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': f'Erro ao listar modelos: {str(e)}'
+        }), 500
+
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({
         'error': 'Endpoint não encontrado',
         'available_endpoints': [
             'GET /health - Verificar status da API',
+            'GET /models - Listar modelos disponíveis',
             'POST /tts - Converter texto em áudio (retorna MP3)',
             'POST /tts/stream - Converter texto em áudio (retorna base64)'
         ]
     }), 404
 
 if __name__ == '__main__':
-    # Configurações para desenvolvimento
     app.run(
         host='0.0.0.0',
         port=5000,
-        debug=False,  # Desabilita debug em produção
+        debug=False,
         threaded=True
     )
