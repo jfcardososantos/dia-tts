@@ -6,6 +6,10 @@ import os
 import logging
 import base64
 from gtts import gTTS
+import scipy.io.wavfile
+
+# Importa as classes corretas para o modelo VITS
+from transformers import VitsTokenizer, VitsModel
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -15,47 +19,36 @@ app = Flask(__name__)
 
 class DiaPortugueseTTSService:
     def __init__(self):
-        self.processor = None
+        self.tokenizer = None
         self.model = None
         self.device = None
         self.available = False
         self.load_model()
     
     def load_model(self):
-        """Carrega o modelo Dia TTS em português"""
+        """Carrega o modelo VITS TTS em português"""
         try:
-            logger.info("🚀 Carregando modelo Alissonerdx/Dia1.6-pt_BR-v1...")
+            MODEL_ID = "Alissonerdx/Dia1.6-pt_BR-v1"
+            logger.info(f"🚀 Carregando modelo {MODEL_ID}...")
             
-            # Define dispositivo
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"📱 Usando device: {self.device}")
             
-            # Tenta importar as classes específicas do Dia
-            try:
-                from transformers import AutoProcessor, DiaForConditionalGeneration
-                
-                # Carrega o processador
-                logger.info("📥 Carregando processador...")
-                self.processor = AutoProcessor.from_pretrained("Alissonerdx/Dia1.6-pt_BR-v1")
-                
-                # Carrega o modelo
-                logger.info("🧠 Carregando modelo...")
-                self.model = DiaForConditionalGeneration.from_pretrained("Alissonerdx/Dia1.6-pt_BR-v1")
-                self.model = self.model.to(self.device)
-                
-                # Configura para modo de inferência
-                self.model.eval()
-                
-                self.available = True
-                logger.info("✅ Modelo Dia TTS português carregado com sucesso!")
-                
-            except ImportError as import_error:
-                logger.warning(f"⚠️ Classe DiaForConditionalGeneration não encontrada: {import_error}")
-                raise Exception("Modelo Dia não disponível")
+            # Carrega o tokenizer e o modelo VITS diretamente (a forma correta)
+            logger.info("📥 Carregando tokenizer VITS...")
+            self.tokenizer = VitsTokenizer.from_pretrained(MODEL_ID)
+            
+            logger.info("🧠 Carregando modelo VITS...")
+            self.model = VitsModel.from_pretrained(MODEL_ID)
+            self.model = self.model.to(self.device)
+            
+            self.model.eval()
+            
+            self.available = True
+            logger.info("✅ Modelo VITS TTS português carregado com sucesso!")
             
         except Exception as e:
-            logger.error(f"❌ Erro ao carregar modelo Dia: {str(e)}")
-            logger.error(f"📝 Tipo do erro: {type(e).__name__}")
+            logger.error(f"❌ Erro ao carregar modelo VITS: {str(e)}")
             self.available = False
             
             # Fallback para Google TTS
@@ -68,7 +61,7 @@ class DiaPortugueseTTSService:
     
     def text_to_speech(self, text: str) -> bytes:
         """
-        Converte texto em fala usando o modelo Dia português ou Google TTS
+        Converte texto em fala usando o modelo VITS ou Google TTS
         """
         if not self.available:
             raise Exception("Serviço TTS não disponível")
@@ -76,61 +69,33 @@ class DiaPortugueseTTSService:
         try:
             logger.info(f"🎵 Gerando áudio para: '{text[:50]}...'")
             
-            # Se estiver usando fallback Google TTS
             if self.model == "gtts_fallback":
                 tts = gTTS(text=text, lang='pt-br', slow=False)
                 mp3_buffer = io.BytesIO()
                 tts.write_to_fp(mp3_buffer)
                 mp3_buffer.seek(0)
                 logger.info("✅ Áudio gerado com Google TTS!")
-                return mp3_buffer.getvalue()
+                return mp3_buffer.getvalue(), 'audio/mpeg'
             
-            # Usando modelo Dia português
-            # Formato correto: precisa do token de speaker [S1]
-            formatted_text = f"[S1] {text}"
+            # Lógica de inferência correta para VITS
+            inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
             
-            # Processa o texto
-            inputs = self.processor(
-                text=[formatted_text], 
-                padding=True, 
-                return_tensors="pt"
-            ).to(self.device)
-            
-            # Gera o áudio
             with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    max_new_tokens=3072,
-                    guidance_scale=3.0,
-                    temperature=1.8,
-                    top_p=0.90,
-                    top_k=45,
-                    do_sample=True
-                )
+                output = self.model(**inputs).waveform
+
+            audio_array = output.cpu().squeeze().numpy()
+            sampling_rate = self.model.config.sampling_rate
             
-            # Decodifica o áudio
-            audio_outputs = self.processor.batch_decode(outputs)
+            # Salva o áudio em um buffer de bytes no formato WAV
+            wav_buffer = io.BytesIO()
+            scipy.io.wavfile.write(wav_buffer, rate=sampling_rate, data=audio_array)
+            wav_buffer.seek(0)
             
-            # Salva como arquivo temporário
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
-            temp_file.close()
-            
-            # Usa o método save_audio do processador
-            self.processor.save_audio(audio_outputs[0], temp_file.name)
-            
-            # Lê o arquivo gerado
-            with open(temp_file.name, 'rb') as f:
-                audio_bytes = f.read()
-            
-            # Remove arquivo temporário
-            os.unlink(temp_file.name)
-            
-            logger.info("✅ Áudio gerado com modelo Dia português!")
-            return audio_bytes
+            logger.info("✅ Áudio gerado com modelo VITS português!")
+            return wav_buffer.getvalue(), 'audio/wav'
             
         except Exception as e:
             logger.error(f"❌ Erro ao gerar áudio: {str(e)}")
-            logger.error(f"📝 Detalhes: {type(e).__name__}")
             raise
 
 # Inicializa o serviço TTS
@@ -139,133 +104,96 @@ tts_service = DiaPortugueseTTSService()
 @app.route('/health', methods=['GET'])
 def health_check():
     """Endpoint para verificar se a API está funcionando"""
-    model_name = "Dia TTS Português" if tts_service.model != "gtts_fallback" else "Google TTS (Fallback)"
-    
+    model_name = "VITS (Alissonerdx/Dia1.6-pt_BR-v1)" if tts_service.model != "gtts_fallback" else "Google TTS (Fallback)"
     return jsonify({
         'status': 'healthy' if tts_service.available else 'unhealthy',
-        'message': 'API TTS funcionando',
         'model': model_name,
-        'language': 'pt-br',
         'device': tts_service.device if hasattr(tts_service, 'device') else 'cpu',
         'available': tts_service.available
     })
 
 @app.route('/tts', methods=['POST'])
 def text_to_speech_endpoint():
-    """
-    Endpoint principal para conversão de texto em fala
-    """
+    """Endpoint principal para conversão de texto em fala"""
+    temp_file_path = None
     try:
-        # Obtém dados do request
         data = request.get_json()
         if not data or 'text' not in data:
-            return jsonify({
-                'error': 'Campo "text" é obrigatório'
-            }), 400
+            return jsonify({'error': 'Campo "text" é obrigatório'}), 400
         
         text = data['text'].strip()
         if not text:
-            return jsonify({
-                'error': 'Texto não pode estar vazio'
-            }), 400
+            return jsonify({'error': 'Texto não pode estar vazio'}), 400
         
-        # Limita o tamanho do texto
         if len(text) > 1000:
-            return jsonify({
-                'error': 'Texto muito longo (máximo 1000 caracteres)'
-            }), 400
+            return jsonify({'error': 'Texto muito longo (máximo 1000 caracteres)'}), 400
         
-        # Gera o áudio
-        audio_bytes = tts_service.text_to_speech(text)
+        audio_bytes, mimetype = tts_service.text_to_speech(text)
         
-        # Cria arquivo temporário
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
-        temp_file.write(audio_bytes)
-        temp_file.close()
+        suffix = '.wav' if mimetype == 'audio/wav' else '.mp3'
+        download_name = 'tts_output' + suffix
         
-        # Retorna o arquivo MP3
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(audio_bytes)
+            temp_file_path = temp_file.name
+        
         return send_file(
-            temp_file.name,
-            mimetype='audio/mpeg',
+            temp_file_path,
+            mimetype=mimetype,
             as_attachment=True,
-            download_name='tts_output.mp3'
+            download_name=download_name
         )
         
     except Exception as e:
         logger.error(f"Erro no endpoint /tts: {str(e)}")
-        return jsonify({
-            'error': f'Erro interno: {str(e)}'
-        }), 500
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
     
     finally:
-        # Remove arquivo temporário se existir
-        try:
-            if 'temp_file' in locals() and os.path.exists(temp_file.name):
-                os.unlink(temp_file.name)
-        except:
-            pass
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
 
 @app.route('/tts/stream', methods=['POST'])
 def text_to_speech_json():
-    """
-    Endpoint que retorna o áudio como base64 em JSON
-    """
+    """Endpoint que retorna o áudio como base64 em JSON"""
     try:
-        # Obtém dados do request
         data = request.get_json()
         if not data or 'text' not in data:
-            return jsonify({
-                'error': 'Campo "text" é obrigatório'
-            }), 400
+            return jsonify({'error': 'Campo "text" é obrigatório'}), 400
         
         text = data['text'].strip()
         if not text:
-            return jsonify({
-                'error': 'Texto não pode estar vazio'
-            }), 400
+            return jsonify({'error': 'Texto não pode estar vazio'}), 400
         
         if len(text) > 1000:
-            return jsonify({
-                'error': 'Texto muito longo (máximo 1000 caracteres)'
-            }), 400
+            return jsonify({'error': 'Texto muito longo (máximo 1000 caracteres)'}), 400
         
-        # Gera o áudio
-        audio_bytes = tts_service.text_to_speech(text)
+        audio_bytes, mimetype = tts_service.text_to_speech(text)
         
-        # Converte para base64
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
         
-        model_name = "Dia TTS Português" if tts_service.model != "gtts_fallback" else "Google TTS (Fallback)"
+        model_name = "VITS (Alissonerdx/Dia1.6-pt_BR-v1)" if tts_service.model != "gtts_fallback" else "Google TTS (Fallback)"
         
         return jsonify({
-            'audio_base64': f'data:audio/mpeg;base64,{audio_base64}',
-            'format': 'mp3',
+            'audio_base64': f'data:{mimetype};base64,{audio_base64}',
+            'format': mimetype.split("/")[1],
             'text': text,
-            'model': model_name,
-            'language': 'pt-br'
+            'model': model_name
         })
         
     except Exception as e:
         logger.error(f"Erro no endpoint /tts/stream: {str(e)}")
-        return jsonify({
-            'error': f'Erro interno: {str(e)}'
-        }), 500
+        return jsonify({'error': f'Erro interno: {str(e)}'}), 500
 
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({
         'error': 'Endpoint não encontrado',
         'available_endpoints': [
-            'GET /health - Verificar status da API',
-            'POST /tts - Converter texto em áudio (retorna MP3)',
-            'POST /tts/stream - Converter texto em áudio (retorna base64)'
+            'GET /health',
+            'POST /tts',
+            'POST /tts/stream'
         ]
     }), 404
 
 if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=5000,
-        debug=False,
-        threaded=True
-    )
+    app.run(host='0.0.0.0', port=5000, debug=False)
