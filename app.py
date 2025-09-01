@@ -36,10 +36,10 @@ class DiaPortugueseTTSService:
             
             # Carrega o tokenizer e o modelo VITS diretamente (a forma correta)
             logger.info("📥 Carregando tokenizer VITS...")
-            self.tokenizer = VitsTokenizer.from_pretrained(MODEL_ID)
+            self.tokenizer = VitsTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
             
             logger.info("🧠 Carregando modelo VITS...")
-            self.model = VitsModel.from_pretrained(MODEL_ID)
+            self.model = VitsModel.from_pretrained(MODEL_ID, trust_remote_code=True)
             self.model = self.model.to(self.device)
             
             self.model.eval()
