@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.tox
+.coverage
+.pytest_cache
+*.egg-info/
+dist/
+build/
+
+# Ambiente virtual
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Arquivos de teste
+*.mp3
+output_*.mp3
+test_output/
+
+# Variáveis de ambiente
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore

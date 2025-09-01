@@ -1,33 +1,39 @@
-# ---- Base Stage ----
-# Usamos uma imagem base slim do Python para manter o tamanho final menor.
 FROM python:3.10-slim
 
-# Define o diretório de trabalho dentro do container
+# Instalar dependências do sistema necessárias
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsndfile1 \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Definir diretório de trabalho
 WORKDIR /app
 
-# Instala dependências do sistema que podem ser necessárias para bibliotecas de áudio.
-# libsndfile1 é usada por bibliotecas como a SciPy para processar arquivos de áudio.
-RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 && rm -rf /var/lib/apt/lists/*
-
-# ---- Dependencies Stage ----
-# Copia o arquivo de dependências primeiro.
-# Esta camada do Docker só será reconstruída se o arquivo requirements.txt mudar.
+# Copiar requirements e instalar dependências Python
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Instala as dependências do Python.
-# --no-cache-dir: Não armazena o cache do pip, mantendo a imagem menor.
-# --prefer-binary: Prefere pacotes binários a compilar do código-fonte, acelerando a instalação.
-RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
+# Copiar código da aplicação
+COPY app.py .
 
-# ---- Application Stage ----
-# Agora copia o código da aplicação.
-# Esta camada será reconstruída se os arquivos .py mudarem.
-COPY main.py .
+# Criar usuário não-root para segurança
+RUN useradd --create-home --shell /bin/bash app && \
+    chown -R app:app /app
+USER app
 
-# Expõe a porta em que a aplicação irá rodar.
-EXPOSE 8000
+# Pré-carregar o modelo (opcional, para acelerar o primeiro uso)
+# RUN python -c "from transformers import pipeline; pipeline('text-to-speech', model='Alissonerdx/Dia1.6-pt_BR-v1')"
 
-# ---- Run Stage ----
-# O comando para iniciar a aplicação quando o container for executado.
-# Usamos --host 0.0.0.0 para tornar a API acessível de fora do container.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Expor porta
+EXPOSE 5000
+
+# Variáveis de ambiente
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+ENV PYTHONPATH=/app
+
+# Comando para executar a aplicação
+CMD ["python", "app.py"]
