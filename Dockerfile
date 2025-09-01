@@ -12,6 +12,7 @@ WORKDIR /app
 # Copiar requirements e instalar dependências Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir git+https://github.com/huggingface/transformers.git && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copiar código da aplicação

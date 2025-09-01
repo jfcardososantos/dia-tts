@@ -1,10 +1,11 @@
 from flask import Flask, request, jsonify, send_file
+import torch
 import io
 import tempfile
 import os
 import logging
 import base64
-from gtts import gTTS
+from transformers import AutoProcessor, DiaForConditionalGeneration
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -12,44 +13,134 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-class TTSService:
+class DiaPortugueseTTSService:
     def __init__(self):
-        self.available = True
-        logger.info("✅ Serviço TTS com Google TTS inicializado")
+        self.processor = None
+        self.model = None
+        self.device = None
+        self.available = False
+        self.load_model()
+    
+    def load_model(self):
+        """Carrega o modelo Dia TTS em português"""
+        try:
+            logger.info("🚀 Carregando modelo Alissonerdx/Dia1.6-pt_BR-v1...")
+            
+            # Define dispositivo
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"📱 Usando device: {self.device}")
+            
+            # Carrega o processador
+            logger.info("📥 Carregando processador...")
+            self.processor = AutoProcessor.from_pretrained("Alissonerdx/Dia1.6-pt_BR-v1")
+            
+            # Carrega o modelo
+            logger.info("🧠 Carregando modelo...")
+            self.model = DiaForConditionalGeneration.from_pretrained("Alissonerdx/Dia1.6-pt_BR-v1")
+            self.model = self.model.to(self.device)
+            
+            # Configura para modo de inferência
+            self.model.eval()
+            
+            self.available = True
+            logger.info("✅ Modelo Dia TTS português carregado com sucesso!")
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao carregar modelo Dia: {str(e)}")
+            logger.error(f"🔍 Tipo do erro: {type(e).__name__}")
+            self.available = False
+            
+            # Fallback para Google TTS
+            try:
+                from gtts import gTTS
+                self.model = "gtts_fallback"
+                self.available = True
+                logger.warning("⚠️ Usando Google TTS como fallback")
+            except:
+                logger.error("❌ Fallback também falhou")
     
     def text_to_speech(self, text: str) -> bytes:
         """
-        Converte texto em fala usando Google TTS
+        Converte texto em fala usando o modelo Dia português
         """
+        if not self.available:
+            raise Exception("Serviço TTS não disponível")
+        
         try:
-            logger.info(f"Gerando áudio para texto: '{text[:50]}...'")
+            logger.info(f"🎵 Gerando áudio para: '{text[:50]}...'")
             
-            # Usa Google TTS em português brasileiro
-            tts = gTTS(text=text, lang='pt-br', slow=False)
+            # Se estiver usando fallback Google TTS
+            if self.model == "gtts_fallback":
+                from gtts import gTTS
+                tts = gTTS(text=text, lang='pt-br', slow=False)
+                mp3_buffer = io.BytesIO()
+                tts.write_to_fp(mp3_buffer)
+                mp3_buffer.seek(0)
+                logger.info("✅ Áudio gerado com Google TTS!")
+                return mp3_buffer.getvalue()
             
-            # Salva em buffer de memória
-            mp3_buffer = io.BytesIO()
-            tts.write_to_fp(mp3_buffer)
-            mp3_buffer.seek(0)
+            # Usando modelo Dia português
+            # Formato correto: precisa do token de speaker [S1]
+            formatted_text = f"[S1] {text}"
             
-            logger.info("✅ Áudio gerado com sucesso!")
-            return mp3_buffer.getvalue()
+            # Processa o texto
+            inputs = self.processor(
+                text=[formatted_text], 
+                padding=True, 
+                return_tensors="pt"
+            ).to(self.device)
+            
+            # Gera o áudio
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=3072,
+                    guidance_scale=3.0,
+                    temperature=1.8,
+                    top_p=0.90,
+                    top_k=45,
+                    do_sample=True
+                )
+            
+            # Decodifica o áudio
+            audio_outputs = self.processor.batch_decode(outputs)
+            
+            # Salva como arquivo temporário
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+            temp_file.close()
+            
+            # Usa o método save_audio do processador
+            self.processor.save_audio(audio_outputs, temp_file.name)
+            
+            # Lê o arquivo gerado
+            with open(temp_file.name, 'rb') as f:
+                audio_bytes = f.read()
+            
+            # Remove arquivo temporário
+            os.unlink(temp_file.name)
+            
+            logger.info("✅ Áudio gerado com modelo Dia português!")
+            return audio_bytes
             
         except Exception as e:
             logger.error(f"❌ Erro ao gerar áudio: {str(e)}")
+            logger.error(f"🔍 Detalhes: {type(e).__name__}")
             raise
 
 # Inicializa o serviço TTS
-tts_service = TTSService()
+tts_service = DiaPortugueseTTSService()
 
 @app.route('/health', methods=['GET'])
 def health_check():
     """Endpoint para verificar se a API está funcionando"""
+    model_name = "Dia TTS Português" if tts_service.model != "gtts_fallback" else "Google TTS (Fallback)"
+    
     return jsonify({
-        'status': 'healthy',
+        'status': 'healthy' if tts_service.available else 'unhealthy',
         'message': 'API TTS funcionando',
-        'model': 'Google TTS',
+        'model': model_name,
         'language': 'pt-br',
+        'device': tts_service.device,
         'available': tts_service.available
     })
 
@@ -138,11 +229,13 @@ def text_to_speech_json():
         # Converte para base64
         audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
         
+        model_name = "Dia TTS Português" if tts_service.model != "gtts_fallback" else "Google TTS (Fallback)"
+        
         return jsonify({
             'audio_base64': f'data:audio/mpeg;base64,{audio_base64}',
             'format': 'mp3',
             'text': text,
-            'model': 'Google TTS',
+            'model': model_name,
             'language': 'pt-br'
         })
         
